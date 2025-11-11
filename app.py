@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageDraw
 import torch
 import os
 
@@ -54,13 +54,21 @@ if uploaded_file and model:
 
     with st.spinner("Detecting..."):
         results = model(image, size=640)
-        results.render()  # Draws boxes
-        st.image(results.ims[0], caption="Detected Trash", use_column_width=True)
-
         preds = results.pandas().xyxy[0]
+
         if len(preds) == 0:
             st.warning("No trash detected.")
         else:
+            # Draw bounding boxes manually using PIL
+            draw = ImageDraw.Draw(image)
+            for _, row in preds.iterrows():
+                box = [row['xmin'], row['ymin'], row['xmax'], row['ymax']]
+                label = row['name']
+                draw.rectangle(box, outline="red", width=2)
+                draw.text((box[0], box[1] - 10), label, fill="red")
+
+            st.image(image, caption="Detected Trash", use_column_width=True)
+
             top = preds.loc[preds['confidence'].idxmax()]
             cls = top['name']
             conf = top['confidence']
@@ -79,4 +87,4 @@ st.markdown("""
 - **Red** → Batteries  
 - **Black** → Non-recyclable
 """)
-st.info("`packages.txt` with `libgl1` is **required** for YOLOv5 on Streamlit Cloud.")
+st.info("This version avoids OpenGL dependencies like `libGL.so.1` by using PIL for rendering.")
