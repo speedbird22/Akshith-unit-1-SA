@@ -1,6 +1,6 @@
 import streamlit as st
-import torch
 from PIL import Image, ImageDraw
+import torch
 import numpy as np
 import os
 
@@ -27,7 +27,8 @@ st.markdown("### Upload trash → Get Swachh Bharat bin color")
 @st.cache_resource
 def load_model():
     try:
-        model = torch.hub.load('ultralytics/yolov5', 'custom', path='best.pt', force_reload=True)
+        model = torch.load("best.pt", map_location=torch.device("cpu"))
+        model.eval()
         return model
     except Exception as e:
         st.error(f"Error loading model: {e}")
@@ -45,25 +46,36 @@ if uploaded_file and model:
     st.image(image, caption="Uploaded", use_column_width=True)
 
     with st.spinner("Detecting..."):
-        results = model(image, size=640)
-        pred = results.pandas().xyxy[0]
+        # Preprocess
+        img = np.array(image)
+        img = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
+        img = img.unsqueeze(0)
 
-        if pred.empty:
+        # Inference
+        results = model(img)[0]
+
+        # Postprocess
+        boxes = results.boxes
+        names = model.names
+
+        if boxes is None or len(boxes) == 0:
             st.warning("No trash detected.")
         else:
             draw = ImageDraw.Draw(image)
-            for _, row in pred.iterrows():
-                box = [row['xmin'], row['ymin'], row['xmax'], row['ymax']]
-                label = row['name']
-                conf = row['confidence']
-                draw.rectangle(box, outline="red", width=2)
-                draw.text((box[0], box[1] - 10), f"{label} {conf:.1%}", fill="red")
+            for box in boxes:
+                b = box.xyxy[0].tolist()
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
+                label = names[cls_id]
+                draw.rectangle(b, outline="red", width=2)
+                draw.text((b[0], b[1] - 10), f"{label} {conf:.1%}", fill="red")
 
             st.image(image, caption="Detected Trash", use_column_width=True)
 
-            top = pred.iloc[pred['confidence'].idxmax()]
-            cls = top['name']
-            conf = top['confidence']
+            top = max(boxes, key=lambda b: b.conf[0])
+            cls_id = int(top.cls[0])
+            conf = float(top.conf[0])
+            cls = names[cls_id]
             color = bin_colors.get(cls, "Unknown")
 
             st.success(f"**{cls.capitalize()}** ({conf:.1%}) → **{color} Bin**")
