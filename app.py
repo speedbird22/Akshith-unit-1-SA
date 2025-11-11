@@ -27,9 +27,10 @@ st.markdown("### Upload trash → Get Swachh Bharat bin color")
 @st.cache_resource
 def load_model():
     try:
-        model = torch.load("best.pt", map_location=torch.device("cpu"))
-        model.eval()
-        return model
+        with torch.serialization.safe_globals(["models.yolo.DetectionModel"]):
+            model = torch.load("best.pt", map_location=torch.device("cpu"), weights_only=False)
+            model.eval()
+            return model
     except Exception as e:
         st.error(f"Error loading model: {e}")
         return None
