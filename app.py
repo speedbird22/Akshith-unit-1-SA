@@ -1,117 +1,92 @@
 import streamlit as st
 from PIL import Image
 import torch
-import cv2
 import numpy as np
+import os
 
 # ------------------- Indian Bin Colors -------------------
-# As per Swachh Bharat Mission (India) - Standard Color Coding
 bin_colors = {
-    'clothes':      'Yellow',      # Reusable/Donatable - Yellow (for dry waste, often clothes go here)
-    'paper':        'Blue',        # Dry waste - Blue bin
-    'glass':        'Blue',        # Dry waste - Blue bin
-    'battery':      'Red',         # Hazardous waste - Red bin (special collection)
-    'plastic':      'Blue',        # Dry waste - Blue bin
-    'shoes':        'Yellow',      # Reusable or dry waste - Yellow
-    'trash':        'Black',       # Non-recyclable - Black bin
-    'cardboard':    'Blue',        # Dry waste - Blue bin
-    'biological':   'Green',       # Wet waste - Green bin
-    'metal':        'Blue'         # Dry waste - Blue bin
+    'clothes': 'Yellow', 'paper': 'Blue', 'glass': 'Blue', 'battery': 'Red',
+    'plastic': 'Blue', 'shoes': 'Yellow', 'trash': 'Black', 'cardboard': 'Blue',
+    'biological': 'Green', 'metal': 'Blue'
 }
 
 bin_descriptions = {
-    'Green':  'Wet Waste (Kitchen waste, food, etc.)',
-    'Blue':   'Dry Waste (Paper, plastic, cardboard, metal, glass)',
-    'Yellow': 'Reusable/Donatable (Clothes, shoes, toys)',
-    'Red':    'Hazardous Waste (Batteries, chemicals, medicines)',
-    'Black':  'Non-recyclable / Reject Waste'
+    'Green': 'Wet Waste (Food, peels, etc.)',
+    'Blue': 'Dry Recyclables (Paper, plastic, metal, glass, cardboard)',
+    'Yellow': 'Clothes / Shoes / Reusables',
+    'Red': 'Hazardous (Batteries, chemicals)',
+    'Black': 'Non-recyclable'
 }
 
-# Class names (must match your training exactly)
-class_names = ['clothes', 'paper', 'glass', 'battery', 'plastic', 
-               'shoes', 'trash', 'cardboard', 'biological', 'metal']
+# ------------------- Streamlit UI -------------------
+st.set_page_config(page_title="Trash Bin India", layout="centered")
+st.title("Indian Trash Classifier")
+st.markdown("### Upload trash → Know which **colored bin** to use!")
 
-# ------------------- Streamlit App -------------------
-st.set_page_config(page_title="Trash Classifier - India", layout="centered")
-st.title("🗑️ Indian Trash Classifier")
-st.markdown("### Upload an image of trash and know which **colored bin** to use in India!")
+# Debug: Show files
+with st.sidebar:
+    st.write("Files in folder:")
+    st.write(os.listdir("."))
 
-# Load YOLOv5 model
+# ------------------- Load Model -------------------
 @st.cache_resource
 def load_model():
+    if not os.path.exists("best.pt"):
+        st.error("best.pt not found! Upload it via Git LFS.")
+        return None
     try:
         model = torch.hub.load('ultralytics/yolov5', 'custom', path='best.pt', force_reload=False)
-        model.conf = 0.4  # confidence threshold
-        model.iou = 0.45  # NMS IoU threshold
+        model.conf = 0.4
+        model.iou = 0.45
         return model
     except Exception as e:
-        st.error(f"Error loading model: {e}")
-        st.info("Make sure 'best.pt' is in the same folder as this script.")
+        st.error(f"Model error: {e}")
         return None
 
 model = load_model()
+if model:
+    st.success("Model loaded!")
 
-# File uploader
-uploaded_file = st.file_uploader("Upload trash image", type=["jpg", "jpeg", "png"])
+# ------------------- Upload & Predict -------------------
+uploaded_file = st.file_uploader("Upload image", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Image", use_column_width=True)
-    
-    if model is None:
-        st.error("Model not loaded. Cannot make predictions.")
-    else:
-        with st.spinner("Analyzing..."):
-            # Convert PIL image to OpenCV format
-            img_cv = np.array(image)
-            img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
-            
-            # Run inference
-            results = model(img_cv)
-            
-            # Get predictions
-            predictions = results.pandas().xyxy[0]  # pandas dataframe
-            
-            if len(predictions) == 0:
-                st.warning("No trash detected. Try a clearer image.")
-            else:
-                # Show results on image
-                results.render()  # renders on img_cv
-                annotated_img = results.ims[0]
-                annotated_img = cv2.cvtColor(annotated_img, cv2.COLOR_BGR2RGB)
-                st.image(annotated_img, caption="Detection Results", use_column_width=True)
-                
-                # Show table of detections
-                st.write("### Detected Items:")
-                for idx, row in predictions.iterrows():
-                    cls_name = row['name']
-                    confidence = row['confidence']
-                    bin_color = bin_colors.get(cls_name, 'Unknown')
-                    
-                    st.markdown(f"""
-                    - **{cls_name.capitalize()}** (Confidence: {confidence:.2f})  
-                      → Throw in **{bin_color} bin**  
-                      _{bin_descriptions[bin_color]}_
-                    """)
-                
-                # Summary: Most confident detection
-                top_pred = predictions.loc[predictions['confidence'].idxmax()]
-                top_class = top_pred['name']
-                top_conf = top_pred['confidence']
-                top_bin = bin_colors[top_class]
-                
-                st.success(f"**Main Item:** {top_class.capitalize()} → Use **{top_bin} Bin**")
-                st.balloons()
+if uploaded_file and model:
+    image = Image.open(uploaded_file).convert("RGB")
+    st.image(image, caption="Uploaded", use_column_width=True)
 
-# ------------------- Instructions -------------------
+    with st.spinner("Detecting..."):
+        # Direct PIL → YOLOv5 (no cv2 needed!)
+        results = model(image, size=640)
+
+        # Render results on image
+        results.render()  # modifies results.ims in-place
+        annotated_image = results.ims[0]  # PIL Image with boxes
+        st.image(annotated_image, caption="Detected", use_column_width=True)
+
+        # Get predictions
+        preds = results.pandas().xyxy[0]
+        if len(preds) == 0:
+            st.warning("No trash detected.")
+        else:
+            # Top prediction
+            top = preds.loc[preds['confidence'].idxmax()]
+            cls = top['name']
+            conf = top['confidence']
+            bin_color = bin_colors[cls]
+
+            st.success(f"**{cls.capitalize()}** ({conf:.1%}) → **{bin_color} Bin**")
+            st.markdown(f"_{bin_descriptions[bin_color]}_")
+            st.balloons()
+
+# ------------------- Guide -------------------
 st.markdown("---")
 st.markdown("""
-### Indian Bin Color Guide:
-- **Green** → Wet waste (food, peels)
-- **Blue** → Dry recyclables (paper, plastic, metal, glass, cardboard)
-- **Yellow** → Clothes, shoes, reusables
-- **Red** → Batteries, e-waste, hazardous
-- **Black** → Non-recyclable trash
+### India Bin Colors (Swachh Bharat)
+- **Green** → Wet waste  
+- **Blue** → Dry recyclables  
+- **Yellow** → Clothes, shoes  
+- **Red** → Batteries, e-waste  
+- **Black** → Non-recyclable
 """)
-
-st.info("Place `best.pt` in the same folder as this `app.py` file.")
+st.info("Make sure `best.pt` is uploaded via Git LFS (large files).")
