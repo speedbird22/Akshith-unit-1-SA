@@ -1,7 +1,15 @@
 import streamlit as st
 from PIL import Image, ImageDraw
-from ultralytics import YOLO
+import torch
 import os
+import sys
+
+# Add YOLOv5 repo to path
+sys.path.insert(0, os.path.abspath("yolov5"))
+from models.experimental import attempt_load
+from utils.general import non_max_suppression, scale_coords
+from utils.datasets import letterbox
+from utils.torch_utils import select_device
 
 # ------------------- Indian Bin Colors -------------------
 bin_colors = {
@@ -32,7 +40,9 @@ def load_model():
         st.error("best.pt not found! Upload via Git LFS.")
         return None
     try:
-        model = YOLO("best.pt")
+        device = select_device('cpu')
+        model = attempt_load("best.pt", map_location=device)
+        model.eval()
         return model
     except Exception as e:
         st.error(f"Error loading model: {e}")
@@ -50,27 +60,32 @@ if uploaded_file and model:
     st.image(image, caption="Uploaded", use_column_width=True)
 
     with st.spinner("Detecting..."):
-        results = model.predict(image, imgsz=640, conf=0.4, iou=0.45)
-        boxes = results[0].boxes
-        names = model.names
+        # Preprocess
+        img = letterbox(image, new_shape=640)[0]
+        img = img.transpose((2, 0, 1))  # HWC to CHW
+        img = torch.from_numpy(img).float() / 255.0
+        img = img.unsqueeze(0)
 
-        if boxes is None or len(boxes) == 0:
+        # Inference
+        pred = model(img, augment=False)[0]
+        pred = non_max_suppression(pred, conf_thres=0.4, iou_thres=0.45)[0]
+
+        draw = ImageDraw.Draw(image)
+        if pred is None or len(pred) == 0:
             st.warning("No trash detected.")
         else:
-            draw = ImageDraw.Draw(image)
-            for box in boxes:
-                b = box.xyxy[0].tolist()
-                cls_id = int(box.cls[0])
-                conf = float(box.conf[0])
-                label = names[cls_id]
-                draw.rectangle(b, outline="red", width=2)
-                draw.text((b[0], b[1] - 10), f"{label} {conf:.1%}", fill="red")
+            names = model.names
+            for *box, conf, cls in pred:
+                box = [int(x.item()) for x in box]
+                label = names[int(cls)]
+                draw.rectangle(box, outline="red", width=2)
+                draw.text((box[0], box[1] - 10), f"{label} {conf:.1%}", fill="red")
 
             st.image(image, caption="Detected Trash", use_column_width=True)
 
-            top = max(boxes, key=lambda b: b.conf[0])
-            cls_id = int(top.cls[0])
-            conf = float(top.conf[0])
+            top = pred[torch.argmax(pred[:, 4])]
+            cls_id = int(top[5])
+            conf = float(top[4])
             cls = names[cls_id]
             color = bin_colors.get(cls, "Unknown")
 
@@ -87,4 +102,4 @@ st.markdown("""
 - **Red** → Batteries  
 - **Black** → Non-recyclable
 """)
-st.info("This version uses `ultralytics` and `opencv-python-headless` to avoid OpenGL errors like `libGL.so.1`.")
+st.info("This version uses YOLOv5 directly and avoids compatibility issues with YOLOv8.")
