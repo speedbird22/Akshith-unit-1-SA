@@ -1,61 +1,90 @@
 import streamlit as st
-import torch
-from PIL import Image
-import numpy as np
+from PIL import Image, ImageDraw
+from ultralytics import YOLO
+import os
 
-# Load YOLOv5 model
-@st.cache_resource
-def load_model():
-    return torch.hub.load('ultralytics/yolov5', 'custom', path='best.pt', force_reload=True)
-
-model = load_model()
-
-# Class names (must match your training)
-class_names = ['clothes', 'paper', 'glass', 'battery', 'plastic', 'shoes', 'trash', 'cardboard', 'biological', 'metal']
-
-# Dustbin color mapping (India)
-dustbin_map = {
-    'clothes': '🔵 Blue (Recyclable)',
-    'paper': '🟢 Green (Biodegradable)',
-    'glass': '🔵 Blue (Recyclable)',
-    'battery': '🔴 Red (Hazardous)',
-    'plastic': '🔵 Blue (Recyclable)',
-    'shoes': '🔵 Blue (Recyclable)',
-    'trash': '⚫ Black (General Waste)',
-    'cardboard': '🟢 Green (Biodegradable)',
-    'biological': '🟢 Green (Biodegradable)',
-    'metal': '🔵 Blue (Recyclable)'
+# ------------------- Indian Bin Colors -------------------
+bin_colors = {
+    'clothes': 'Yellow', 'paper': 'Blue', 'glass': 'Blue', 'battery': 'Red',
+    'plastic': 'Blue', 'shoes': 'Yellow', 'trash': 'Black', 'cardboard': 'Blue',
+    'biological': 'Green', 'metal': 'Blue'
 }
 
-# App title
-st.title("🗑️ Trash Classifier")
-st.write("Upload an image of trash and get its classification using YOLOv5.")
+bin_descriptions = {
+    'Green': 'Wet Waste (food, peels)',
+    'Blue': 'Dry Recyclables (paper, plastic, metal, glass)',
+    'Yellow': 'Clothes / Shoes',
+    'Red': 'Hazardous (batteries)',
+    'Black': 'Non-recyclable'
+}
 
-# Upload image
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+st.set_page_config(page_title="Trash India", layout="centered")
+st.title("🗑️ Indian Trash Classifier")
+st.markdown("### Upload trash → Get Swachh Bharat bin color")
 
-if uploaded_file:
+with st.sidebar:
+    st.write("Files:", os.listdir("."))
+
+# ------------------- Load YOLOv5 Model -------------------
+@st.cache_resource
+def load_model():
+    if not os.path.exists("best.pt"):
+        st.error("best.pt not found! Upload via Git LFS.")
+        return None
+    try:
+        model = YOLO("best.pt")
+        return model
+    except Exception as e:
+        st.error(f"Error loading model: {e}")
+        return None
+
+model = load_model()
+if model:
+    st.success("✅ YOLOv5 Model loaded successfully!")
+
+# ------------------- Predict -------------------
+uploaded_file = st.file_uploader("Upload image", type=["jpg", "jpeg", "png"])
+
+if uploaded_file and model:
     image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Image", use_column_width=True)
+    st.image(image, caption="Uploaded", use_column_width=True)
 
-    # Run inference
-    results = model(image)
-    results.render()
+    with st.spinner("Detecting..."):
+        results = model.predict(image, imgsz=640, conf=0.4, iou=0.45)
+        boxes = results[0].boxes
+        names = model.names
 
-    # Parse prediction
-    pred = results.pandas().xyxy[0]
-    if pred.empty:
-        st.warning("No object detected.")
-    else:
-        top = pred.iloc[0]
-        cls_id = int(top['class'])
-        cls_name = class_names[cls_id]
-        conf = top['confidence']
-        st.success(f"🧠 Prediction: **{cls_name}** ({conf:.2f} confidence)")
+        if boxes is None or len(boxes) == 0:
+            st.warning("No trash detected.")
+        else:
+            draw = ImageDraw.Draw(image)
+            for box in boxes:
+                b = box.xyxy[0].tolist()
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
+                label = names[cls_id]
+                draw.rectangle(b, outline="red", width=2)
+                draw.text((b[0], b[1] - 10), f"{label} {conf:.1%}", fill="red")
 
-        # Show annotated image
-        st.image(results.ims[0], caption="Detected", use_column_width=True)
+            st.image(image, caption="Detected Trash", use_column_width=True)
 
-        # Suggest dustbin color
-        bin_color = dustbin_map.get(cls_name, "⚫ Black (General Waste)")
-        st.markdown(f"### 🗂 Suggested Dustbin: {bin_color}")
+            top = max(boxes, key=lambda b: b.conf[0])
+            cls_id = int(top.cls[0])
+            conf = float(top.conf[0])
+            cls = names[cls_id]
+            color = bin_colors.get(cls, "Unknown")
+
+            st.success(f"**{cls.capitalize()}** ({conf:.1%}) → **{color} Bin**")
+            st.markdown(f"_{bin_descriptions[color]}_")
+            st.balloons()
+
+st.markdown("---")
+st.markdown("""
+### Swachh Bharat Bin Colors
+- **Green** → Wet waste  
+- **Blue** → Dry recyclables  
+- **Yellow** → Clothes, shoes  
+- **Red** → Batteries  
+- **Black** → Non-recyclable
+""")
+st.info("This version uses `ultralytics` and `opencv-python-headless` to avoid OpenGL errors like `libGL.so.1`.")
