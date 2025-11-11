@@ -4,11 +4,18 @@ import torch
 import numpy as np
 import os
 
-# ------------------- Bin Colors -------------------
+# ------------------- Class-to-Bin Mapping -------------------
 bin_colors = {
-    'clothes': 'Yellow', 'paper': 'Blue', 'glass': 'Blue', 'battery': 'Red',
-    'plastic': 'Blue', 'shoes': 'Yellow', 'trash': 'Black', 'cardboard': 'Blue',
-    'biological': 'Green', 'metal': 'Blue'
+    'biological': 'Green',
+    'plastic': 'Blue',
+    'glass': 'Blue',
+    'metal': 'Blue',
+    'paper': 'Blue',
+    'cardboard': 'Blue',
+    'trash': 'Black',
+    'clothes': 'Yellow',
+    'shoes': 'Yellow',
+    'battery': 'Red'
 }
 
 bin_descriptions = {
@@ -19,6 +26,14 @@ bin_descriptions = {
     'Black': 'Non-recyclable'
 }
 
+bin_outline = {
+    'Green': 'green',
+    'Blue': 'blue',
+    'Yellow': 'orange',
+    'Red': 'red',
+    'Black': 'gray'
+}
+
 st.set_page_config(page_title="Trash India", layout="centered")
 st.title("🗑️ Indian Trash Classifier")
 st.markdown("### Upload trash → Get Swachh Bharat bin color")
@@ -27,10 +42,8 @@ st.markdown("### Upload trash → Get Swachh Bharat bin color")
 @st.cache_resource
 def load_model():
     try:
-        with torch.serialization.safe_globals(["models.yolo.DetectionModel"]):
-            model = torch.load("best.pt", map_location=torch.device("cpu"), weights_only=False)
-            model.eval()
-            return model
+        model = torch.hub.load('ultralytics/yolov5', 'custom', path='best.pt', source='github', force_reload=True)
+        return model
     except Exception as e:
         st.error(f"Error loading model: {e}")
         return None
@@ -47,36 +60,27 @@ if uploaded_file and model:
     st.image(image, caption="Uploaded", use_column_width=True)
 
     with st.spinner("Detecting..."):
-        # Preprocess
-        img = np.array(image)
-        img = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
-        img = img.unsqueeze(0)
+        results = model(image, size=640)
+        pred = results.pandas().xyxy[0]
 
-        # Inference
-        results = model(img)[0]
-
-        # Postprocess
-        boxes = results.boxes
-        names = model.names
-
-        if boxes is None or len(boxes) == 0:
+        if pred.empty:
             st.warning("No trash detected.")
         else:
             draw = ImageDraw.Draw(image)
-            for box in boxes:
-                b = box.xyxy[0].tolist()
-                cls_id = int(box.cls[0])
-                conf = float(box.conf[0])
-                label = names[cls_id]
-                draw.rectangle(b, outline="red", width=2)
-                draw.text((b[0], b[1] - 10), f"{label} {conf:.1%}", fill="red")
+            for _, row in pred.iterrows():
+                label = row['name']
+                conf = row['confidence']
+                box = [row['xmin'], row['ymin'], row['xmax'], row['ymax']]
+                bin_color = bin_colors.get(label, "Unknown")
+                outline = bin_outline.get(bin_color, "red")
+                draw.rectangle(box, outline=outline, width=2)
+                draw.text((box[0], box[1] - 10), f"{label} {conf:.1%}", fill=outline)
 
             st.image(image, caption="Detected Trash", use_column_width=True)
 
-            top = max(boxes, key=lambda b: b.conf[0])
-            cls_id = int(top.cls[0])
-            conf = float(top.conf[0])
-            cls = names[cls_id]
+            top = pred.iloc[pred['confidence'].idxmax()]
+            cls = top['name']
+            conf = top['confidence']
             color = bin_colors.get(cls, "Unknown")
 
             st.success(f"**{cls.capitalize()}** ({conf:.1%}) → **{color} Bin**")
@@ -86,9 +90,9 @@ if uploaded_file and model:
 st.markdown("---")
 st.markdown("""
 ### Swachh Bharat Bin Colors
-- **Green** → Wet waste  
-- **Blue** → Dry recyclables  
-- **Yellow** → Clothes, shoes  
-- **Red** → Batteries  
-- **Black** → Non-recyclable
+- 🟩 **Green** → Wet waste  
+- 🟦 **Blue** → Dry recyclables  
+- 🟨 **Yellow** → Clothes, shoes  
+- 🟥 **Red** → Batteries  
+- ⬛ **Black** → Non-recyclable
 """)
