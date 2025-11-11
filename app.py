@@ -3,12 +3,6 @@ from PIL import Image
 import torch
 import os
 
-# FORCE HEADLESS MODE — THIS IS THE ONLY LINE THAT MATTERS
-import os
-os.environ["YOLO_VERBOSE"] = "False"          # Silence logs
-os.environ["OPENCV_IO_ENABLE_OPENCL"] = "0"   # Disable OpenCL
-os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
-
 # ------------------- Indian Bin Colors -------------------
 bin_colors = {
     'clothes': 'Yellow', 'paper': 'Blue', 'glass': 'Blue', 'battery': 'Red',
@@ -21,34 +15,32 @@ bin_descriptions = {
     'Red': 'Hazardous (Batteries)', 'Black': 'Non-recyclable'
 }
 
-st.set_page_config(page_title="Trash Classifier India", layout="centered")
-st.title("Indian Trash Classifier")
+st.set_page_config(page_title="Trash India", layout="centered")
+st.title("🗑️ Indian Trash Classifier")
 st.markdown("### Upload trash → Get correct bin color (Swachh Bharat)")
 
-# Debug
+# Debug sidebar
 with st.sidebar:
-    st.write("Files in folder:", os.listdir("."))
+    st.write("Files:", os.listdir("."))
 
 # ------------------- Load Model -------------------
 @st.cache_resource
 def load_model():
     if not os.path.exists("best.pt"):
-        st.error("best.pt not found! Upload using Git LFS.")
+        st.error("best.pt not found! Upload with Git LFS.")
         return None
     try:
-        # This forces pure PyTorch backend — no OpenCV at all
-        model = torch.hub.load('ultralytics/yolov5', 'custom', path='best.pt', 
-                               force_reload=False, _verbose=False)
-        model.conf = 0.40
+        model = torch.hub.load('yolov5-headless', 'custom', path='best.pt', source='local')
+        model.conf = 0.4
         model.iou = 0.45
         return model
     except Exception as e:
-        st.error(f"Model failed: {e}")
+        st.error(f"Error: {e}")
         return None
 
 model = load_model()
 if model:
-    st.success("Model loaded successfully!")
+    st.success("✅ Model loaded (headless mode - no libGL!)")
 
 # ------------------- Predict -------------------
 uploaded_file = st.file_uploader("Upload image", type=["jpg", "jpeg", "png"])
@@ -58,9 +50,8 @@ if uploaded_file and model:
     st.image(image, caption="Uploaded", use_column_width=True)
 
     with st.spinner("Detecting..."):
-        # Direct PIL → YOLOv5 (no cv2, no libGL)
         results = model(image, size=640)
-        results.render()  # Draws boxes
+        results.render()  # Draws boxes on results.ims[0]
         st.image(results.ims[0], caption="Result", use_column_width=True)
 
         preds = results.pandas().xyxy[0]
@@ -70,11 +61,10 @@ if uploaded_file and model:
             top = preds.loc[preds['confidence'].idxmax()]
             cls = top['name']
             conf = top['confidence']
-            bin_color = bin_colors.get(cls, "Unknown")
+            color = bin_colors.get(cls, "Unknown")
 
-            st.success(f"**{cls.capitalize()}** ({conf:.1%})")
-            st.markdown(f"### Throw in **{bin_color} Bin**")
-            st.markdown(f"_{bin_descriptions[bin_color]}_")
+            st.success(f"**{cls.capitalize()}** ({conf:.1%}) → **{color} Bin**")
+            st.markdown(f"_{bin_descriptions[color]}_")
             st.balloons()
 
 st.markdown("---")
